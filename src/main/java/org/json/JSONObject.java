@@ -162,6 +162,14 @@ public class JSONObject {
     static final Pattern NUMBER_PATTERN = Pattern.compile("-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?");
 
     /**
+     * The maximum number of characters a numeric value may have to be converted
+     * into a number, and the maximum number of decimal digits an integer may have
+     * when materialised from a decimal value. Longer values are kept as strings
+     * (or treated as unconvertible) to prevent resource exhaustion.
+     */
+    private static final int MAX_NUMBER_LENGTH = 1000;
+
+    /**
      * The map where the JSONObject's properties are kept.
      */
     private final Map<String, Object> map;
@@ -1245,7 +1253,7 @@ public class JSONObject {
             return (BigInteger) val;
         }
         if (val instanceof BigDecimal){
-            return ((BigDecimal) val).toBigInteger();
+            return bigDecimalToBigInteger((BigDecimal) val, defaultValue);
         }
         if (val instanceof Double || val instanceof Float){
             if (!numberIsFinite((Number)val)) {
@@ -1266,12 +1274,35 @@ public class JSONObject {
             // that type cast support that may truncate the decimal.
             final String valStr = val.toString();
             if(isDecimalNotation(valStr)) {
-                return new BigDecimal(valStr).toBigInteger();
+                return bigDecimalToBigInteger(new BigDecimal(valStr), defaultValue);
             }
             return new BigInteger(valStr);
         } catch (Exception e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Converts a BigDecimal to a BigInteger without materialising an integer
+     * whose decimal representation would exceed MAX_NUMBER_LENGTH digits. This
+     * prevents resource exhaustion from short exponent literals such as
+     * <code>1e100000000</code> or <code>1e-100000000</code>.
+     *
+     * @param bd value to convert
+     * @param defaultValue value returned when the integer part is too large.
+     * @return BigInteger conversion (truncated) of the value, or the defaultValue
+     *          if its integer part exceeds MAX_NUMBER_LENGTH digits.
+     */
+    private static BigInteger bigDecimalToBigInteger(BigDecimal bd, BigInteger defaultValue) {
+        if (bd.signum() == 0 || bd.precision() <= bd.scale()) {
+            // no integer digits, the truncated value is zero. Checked first so
+            // toBigInteger() never builds a huge power of ten as divisor.
+            return BigInteger.ZERO;
+        }
+        if ((long) bd.precision() - bd.scale() > MAX_NUMBER_LENGTH) {
+            return defaultValue;
+        }
+        return bd.toBigInteger();
     }
 
     /**
@@ -2313,7 +2344,9 @@ public class JSONObject {
         char initial = string.charAt(0);
         if ((initial >= '0' && initial <= '9') || initial == '-') {
             try {
-                return stringToNumber(string);
+                if (string.length() <= MAX_NUMBER_LENGTH) {
+                    return stringToNumber(string);
+                }
             } catch (Exception ignore) {
             }
         }
